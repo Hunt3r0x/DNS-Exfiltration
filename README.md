@@ -28,8 +28,8 @@ You can install the required Python packages using pip:
 
 ```sh
 python3 ./server.py -o output.txt
-```
-
+``` 
+Pro Server Options
 ```sh
 python3 ./server.py -o output.txt -p 53
 ```
@@ -46,6 +46,7 @@ Here's an example of how to run the client script:
 python3 ./client.py -d "google.com" -f "passwords.txt"
 ```
 
+Pro Client Options
 ```sh
 python3 client.py -d legitimate-domain.com -f passwords.txt -p 53 --nameserver 10.10.166.126
 ```
