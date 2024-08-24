@@ -26,11 +26,12 @@ You can install the required Python packages using pip:
 
 1. Run the `server.py` script with the `-o` or `--output` option to specify the output file where the exfiltrated data will be saved.
 
-```sh
+```bash
 python3 ./server.py -o output.txt
 ``` 
 Pro Server Options
-```sh
+
+```bash
 python3 ./server.py -o output.txt -p 53
 ```
 
