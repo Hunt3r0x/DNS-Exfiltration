@@ -65,8 +65,9 @@ if __name__ == "__main__":
     logger = CustomDNSLogger()
     server = DNSServer(resolver, port=5053, address="0.0.0.0", logger=logger)
     server.start_thread()
-    parser = argparse.ArgumentParser(description="DNS exfiltration server")
+    parser = argparse.ArgumentParser(description="DNS exfiltration server.")
     parser.add_argument("-o", "--output", required=True, help="Path to the output file.")
+    parser.add_argument("-p", "--port", help="Server listening port.")
     args = parser.parse_args()
 
     try:
