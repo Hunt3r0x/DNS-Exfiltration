@@ -1,0 +1,4 @@
+dnslib>=0.9.19
+colorama>=0.4.6
+typing-extensions>=4.5.0
+dnspython>=2.3.0 
