@@ -41,6 +41,7 @@ python server.py -o output.txt -p 5353
 
 - `-o, --output`: Path to the output file (required)
 - `-p, --port`: Server listening port (default: 53)
+![](https://i.imgur.com/f2D0Z7p.png)
 
 ## Configuration
 
@@ -69,7 +70,6 @@ Logs are stored in the `logs` directory with timestamps. Both file and console l
 
 ## Contributing
 
-![](https://i.imgur.com/f2D0Z7p.png)
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
