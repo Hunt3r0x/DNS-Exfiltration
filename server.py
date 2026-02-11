@@ -91,7 +91,7 @@ class ExfiltrationResolver(BaseResolver):
             and candidates
         ):
             oldest_id = min(candidates, key=lambda sid: self.session_first_seen.get(sid, 0.0))
-            self.try_write_to_file(oldest_id)
+            self.try_write_to_file(oldest_id, force_write=True)
             self.data_chunks.pop(oldest_id, None)
             self.expected_total_chunks.pop(oldest_id, None)
             self.session_first_seen.pop(oldest_id, None)
@@ -105,7 +105,7 @@ class ExfiltrationResolver(BaseResolver):
         now = time.time()
         for sid in list(self.session_last_activity.keys()):
             if now - self.session_last_activity.get(sid, 0) > self.config.chunk_timeout:
-                self.try_write_to_file(sid)
+                self.try_write_to_file(sid, force_write=True)
                 self.data_chunks.pop(sid, None)
                 self.expected_total_chunks.pop(sid, None)
                 self.session_first_seen.pop(sid, None)
@@ -223,12 +223,17 @@ class ExfiltrationResolver(BaseResolver):
             reply.header.rcode = 3
             return reply
 
-    def try_write_to_file(self, session_id: str) -> None:
+    def try_write_to_file(self, session_id: str, force_write: bool = False) -> None:
         """
         Try to write the current data for a session to file as binary.
-        
+
+        Only writes when:
+        - (A) expected_total_chunks is set (DONE received) and we have exactly that many chunks, or
+        - (B) force_write is True and combined data has valid Base32 length (shutdown / eviction / expiry).
+
         Args:
             session_id: Session ID to write data for
+            force_write: If True, allow write when valid length even when DONE not received (for shutdown/eviction/expiry).
         """
         try:
             if session_id not in self.data_chunks:
@@ -263,13 +268,14 @@ class ExfiltrationResolver(BaseResolver):
             if self.session_written.get(session_id, False):
                 return
 
-            # When DONE was received, only write when we have exactly expected chunks.
+            # Only allow write when (A) DONE received and we have expected chunks, or (B) force_write (shutdown/eviction/expiry).
             expected = self.expected_total_chunks.get(session_id)
             if expected is not None:
                 if len(available_chunks) != expected:
                     return
-            # If DONE not received (backward compat), write when we have valid length
-            # (but only once - the flag above prevents multiple writes)
+            else:
+                if not force_write:
+                    return
 
             try:
                 # Decode Base32 (handles padding; only called when length is valid)
@@ -313,7 +319,7 @@ class ExfiltrationResolver(BaseResolver):
     def save_all_sessions(self) -> None:
         """Final save attempt for all sessions when server is shutting down."""
         for session_id in list(self.data_chunks.keys()):
-            self.try_write_to_file(session_id)
+            self.try_write_to_file(session_id, force_write=True)
 
 
 def parse_args():
