@@ -359,7 +359,7 @@ if __name__ == "__main__":
         print(f"{Fore.GREEN}{Style.BRIGHT}[+] DNS Server started...")
         print(f"{Fore.GREEN}{Style.BRIGHT}[+] Output directory: {args.output_dir}")
         # Avoid busy-waiting and keep CPU usage low while the server thread runs.
-        while server.is_alive():
+        while server.isAlive():
             time.sleep(0.5)
     except KeyboardInterrupt:
         print(f"{Fore.MAGENTA}{Style.BRIGHT}\n[+] Saving all received data...")
