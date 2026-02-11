@@ -1,4 +1,5 @@
-dnslib>=0.9.19
-colorama>=0.4.6
+dnslib>=0.9.19,<1
+colorama>=0.4.6,<1
 typing-extensions>=4.5.0
-dnspython>=2.3.0 
+dnspython>=2.3.0,<3
+pytest>=7.0.0
