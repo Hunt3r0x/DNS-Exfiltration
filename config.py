@@ -1,6 +1,8 @@
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Optional
+
 
 @dataclass
 class ServerConfig:
@@ -27,7 +29,12 @@ class ServerConfig:
     enable_adaptive_rate: bool = True  # Enable adaptive rate limiting
     enable_jitter: bool = True  # Add random jitter to delays
     checksum_algorithm: str = "crc16"  # Checksum algorithm
-    
+
+    # Server limits
+    max_sessions: int = 100  # Maximum concurrent sessions to track
+    max_total_chunks: int = 50000  # Maximum total chunks across all sessions
+    server_rate_limit: Optional[int] = None  # Max queries per minute (global); None = disabled
+
     def __post_init__(self):
         """Validate and create necessary directories."""
         # Create required directories
@@ -62,13 +69,25 @@ class ServerConfig:
             raise ValueError("Base rate limit must be positive")
         if self.max_rate_limit < self.base_rate_limit:
             raise ValueError("Max rate limit must be >= base rate limit")
+        if self.max_sessions <= 0:
+            raise ValueError("max_sessions must be positive")
+        if self.max_total_chunks <= 0:
+            raise ValueError("max_total_chunks must be positive")
+        if self.server_rate_limit is not None and self.server_rate_limit <= 0:
+            raise ValueError("server_rate_limit must be positive when set")
+
 
 # Default configuration
 default_config = ServerConfig()
 
 def load_config(config_path: Optional[str] = None) -> ServerConfig:
     """Load configuration from a file or use default values."""
-    if config_path and os.path.exists(config_path):
-        # TODO: Implement configuration loading from file
-        pass
-    return default_config 
+    defaults = asdict(default_config)
+    if not config_path or not os.path.exists(config_path):
+        return ServerConfig(**defaults)
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    allowed = set(ServerConfig.__dataclass_fields__)
+    overrides = {k: v for k, v in data.items() if k in allowed}
+    merged = {**defaults, **overrides}
+    return ServerConfig(**merged)
