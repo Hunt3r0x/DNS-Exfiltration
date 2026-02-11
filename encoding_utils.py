@@ -31,6 +31,11 @@ def decode_base32_no_padding(encoded: str) -> bytes:
     """
     Decode Base32 string that may be missing padding.
     
+    Per RFC 4648, the last block can only have 8, 2, 4, 5, or 7 data characters
+    (padding 0, 6, 4, 3, or 1). So len(encoded) % 8 must be in {0, 2, 4, 5, 7}.
+    If it is 1, 3, or 6, the string is not a valid partial Base32 stream and
+    decoding will raise; the caller should only call when length is valid.
+    
     Args:
         encoded: Base32-encoded string (may be missing padding)
         
@@ -40,10 +45,16 @@ def decode_base32_no_padding(encoded: str) -> bytes:
     Raises:
         binascii.Error: If the string is not valid Base32
     """
-    # Base32 requires padding to be a multiple of 8 characters
+    # RFC 4648: valid unpadded lengths mod 8 are 0, 2, 4, 5, 7
+    # (last block has 8, 2, 4, 5, or 7 chars; padding is 0, 6, 4, 3, 1)
+    remainder = len(encoded) % 8
+    if remainder not in (0, 2, 4, 5, 7):
+        raise binascii.Error("Invalid Base32 length: incomplete stream (len mod 8 must be 0, 2, 4, 5, 7)")
+    
+    # Add padding to multiple of 8
     padding_needed = (8 - len(encoded) % 8) % 8
     if padding_needed > 0:
-        encoded += "=" * padding_needed
+        encoded = encoded + "=" * padding_needed
     
     return base64.b32decode(encoded, casefold=True)
 
