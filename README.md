@@ -8,44 +8,80 @@ methods are restricted.
 ### Features
 
 - **Client**:
-  - Reads arbitrary binary files and base64-encodes them.
-  - Splits data into DNS-safe chunks based on label length constraints.
-  - Sends chunks as `A` queries with the format `NNN-<base64_chunk>.<domain>`.
-  - Rate limiting to avoid overwhelming the server.
+  - Reads arbitrary binary files and Base32-encodes them (no padding).
+  - Splits data into DNS-safe chunks (40-50 characters per chunk).
+  - Generates unique session IDs for each transfer.
+  - Calculates checksums for each chunk to detect corruption.
+  - Sends chunks as `A` queries with the format `<session>-<seq>-<chunk>-<checksum>.<domain>`.
+  - Adaptive rate limiting with exponential backoff and jitter.
+  - Retry logic for failed chunks.
   - File and console logging via a central logger.
 
 - **Server**:
-  - Listens for DNS queries and extracts base64 chunks from the leading label.
-  - Reconstructs the full base64 stream in order and decodes it back to bytes.
-  - Writes the decoded data to an output file (binary-safe).
+  - Listens for DNS queries and extracts Base32 chunks from the leading label.
+  - Validates checksums before accepting chunks.
+  - Supports multiple concurrent transfers via session IDs.
+  - Reconstructs the full Base32 stream per session and decodes it back to bytes.
+  - Writes decoded data to files named by session ID (binary-safe).
   - Colored console output for better visibility.
 
 - **Configuration**:
-  - Central configuration in `config.py` (chunk limits, total size, rate limit, etc.).
+  - Central configuration in `config.py` (chunk limits, total size, rate control, etc.).
   - Logs written to a dedicated `logs` directory.
 
-### Protocol overview
+### Protocol Overview
 
-The client and server agree on a very simple protocol:
+The client and server use a reliable DNS-based transfer protocol optimized for stability:
 
-- The client base64-encodes the raw file bytes.
-- The encoded string is split into fixed-size chunks.
-- Each chunk is sent in a DNS query name:
+#### Label Format
+```
+<session>-<seq>-<chunk>-<checksum>.domain.com
+```
 
-  - Leading label: `NNN-<base64_chunk>`
-    - `NNN` is a zero-padded chunk ID (`000`, `001`, `002`, ...).
-    - `<base64_chunk>` is a slice of the base64 string.
-    - The entire leading label length never exceeds 63 characters.
-  - Full query name: `NNN-<base64_chunk>.<your_domain>`
+Where:
+- **session**: 6-character Base32 session ID (30 bits, ~1B unique sessions)
+- **seq**: 4-digit zero-padded sequence number (0000-9999, supports up to 10K chunks)
+- **chunk**: 40-48 character Base32-encoded data (no padding)
+- **checksum**: 3-character Base32 checksum (15 bits, detects corruption)
+- **Total**: Maximum 63 characters (DNS label limit)
 
-- The server:
-  - Extracts the leading label from the query name.
-  - Splits it into `NNN` and `<base64_chunk>`.
-  - Stores each chunk in memory keyed by its `NNN`.
-  - After every chunk, reconstructs the ordered base64 stream (`000`, `001`, `002`, ...)
-    and attempts to decode it and write the resulting bytes to the output file.
+#### Encoding: Base32 (No Padding)
+- Uses Base32 encoding (A-Z, 2-7) which is more DNS-friendly than Base64
+- No padding eliminates issues with chunk boundaries
+- Case-insensitive and DNS-safe
 
-Because everything ultimately operates on **bytes** and base64, both text and
+#### Transfer Process
+
+1. **Client Side**:
+   - Read file bytes
+   - Generate unique 6-character Base32 session ID
+   - Base32-encode file (strip padding)
+   - Split into chunks (40-50 chars each)
+   - For each chunk:
+     - Calculate CRC16 checksum (encoded as 3-char Base32)
+     - Format: `<session>-<seq>-<chunk>-<checksum>`
+     - Send DNS query with adaptive rate limiting
+     - Retry on failure with exponential backoff
+
+2. **Server Side**:
+   - Receive DNS query
+   - Parse label: `<session>-<seq>-<chunk>-<checksum>`
+   - Validate checksum before accepting chunk
+   - Store chunk by session ID and sequence number
+   - Reconstruct Base32 string (add padding if needed)
+   - Decode Base32 to bytes
+   - Write to file named by session ID
+
+#### Reliability Features
+
+- **Session IDs**: Prevent collisions when multiple transfers occur simultaneously
+- **Checksums**: Detect and reject corrupted chunks from DNS transmission issues
+- **Adaptive Rate Control**: Automatically adjusts query rate based on response times
+- **Exponential Backoff**: Reduces load on DNS infrastructure when errors occur
+- **Jitter**: Random delay variation reduces detection risk
+- **Retry Logic**: Automatically retries failed chunks
+
+Because everything ultimately operates on **bytes** and Base32, both text and
 binary files are supported.
 
 ### Installation
@@ -70,18 +106,18 @@ pip install -r requirements.txt
 Start the exfiltration server on the default DNS port:
 
 ```bash
-python server.py -o output.bin
+python server.py -o output
 ```
 
 Use a custom port:
 
 ```bash
-python server.py -o output.bin -p 5353
+python server.py -o output -p 5353
 ```
 
 Command line arguments:
 
-- `-o, --output`: Path to the output file (required).
+- `-o, --output-dir`: Path to the output directory (default: `output`). Files are named by session ID (e.g., `ABC123.bin`).
 - `-p, --port`: Server listening port (default: 53).
 
 #### 2. Run the client
@@ -113,23 +149,42 @@ Client arguments:
 The tool is configured through `config.py` using the `ServerConfig` dataclass.
 Key settings include:
 
+**Basic Settings:**
 - `port`: Default DNS port (used by the server if not overridden via CLI).
 - `address`: Listen address for the server (default `0.0.0.0`).
-- `max_chunk_size`: Maximum base64 chunk size (capped by DNS label limits).
 - `max_total_size`: Maximum total file size in bytes (default 10 MB).
 - `chunk_timeout`: Reserved for chunk timeouts (not yet fully used).
 - `log_dir`: Directory for log files.
 - `output_dir`: Default directory for output files.
 - `require_auth` / `auth_key`: Reserved for optional authentication.
-- `rate_limit`: Maximum requests per minute (used by the client for pacing).
 
-### Security considerations
+**Base32 Format Settings:**
+- `chunk_size`: Base32 chunk size in characters (default: 45, range: 40-50).
+- `session_id_length`: Session ID length in Base32 characters (default: 6).
+- `checksum_length`: Checksum length in Base32 characters (default: 3).
 
-- **Rate limiting**: The client enforces a simple rate limit based on
-  `rate_limit` to reduce the risk of overloading the DNS server.
-- **Size limits**: `max_total_size` prevents excessive memory and disk usage.
-- **Input validation**: The server validates chunk IDs and handles malformed
-  base64 chunks gracefully without crashing.
+**Rate Control Settings:**
+- `base_rate_limit`: Base queries per minute (default: 75).
+- `max_rate_limit`: Maximum queries per minute (default: 150).
+- `enable_adaptive_rate`: Enable adaptive rate limiting based on response times (default: True).
+- `enable_jitter`: Add random jitter to delays to reduce detection risk (default: True).
+- `checksum_algorithm`: Checksum algorithm (default: "crc16").
+
+### Security Considerations
+
+- **Adaptive Rate Limiting**: The client automatically adjusts query rate based on
+  DNS response times, preventing overload while maximizing throughput.
+- **Exponential Backoff**: Failed queries trigger exponential backoff to reduce
+  load on DNS infrastructure.
+- **Jitter**: Random delay variation reduces detection risk and prevents
+  synchronized query patterns.
+- **Checksum Validation**: Server validates checksums before accepting chunks,
+  detecting and rejecting corrupted data.
+- **Size Limits**: `max_total_size` prevents excessive memory and disk usage.
+- **Input Validation**: The server validates session IDs, sequence numbers, and
+  Base32 data, handling malformed chunks gracefully without crashing.
+- **Session Isolation**: Multiple concurrent transfers are isolated by session ID,
+  preventing data corruption from mixed transfers.
 
 ### Logging
 
