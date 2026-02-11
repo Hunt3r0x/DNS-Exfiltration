@@ -176,8 +176,14 @@ class ExfiltrationResolver(BaseResolver):
             if not is_valid_base32(combined_data):
                 raise ValueError("Combined data contains invalid Base32 characters")
 
+            # RFC 4648: valid Base32 unpadded length mod 8 is only 0, 2, 4, 5, 7.
+            # If we have 1, 3, or 6 mod 8, we have an incomplete stream (middle of
+            # receiving chunks); skip decode to avoid "Incorrect padding" errors.
+            if len(combined_data) % 8 not in (0, 2, 4, 5, 7):
+                return
+
             try:
-                # Decode Base32 (handles padding automatically)
+                # Decode Base32 (handles padding; only called when length is valid)
                 decoded_bytes = decode_base32_no_padding(combined_data)
                 
                 # Write to file named by session ID
