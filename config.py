@@ -7,7 +7,7 @@ class ServerConfig:
     """Configuration for the DNS server."""
     port: int = 53
     address: str = "0.0.0.0"
-    max_chunk_size: int = 1024  # Maximum size of each chunk in bytes
+    max_chunk_size: int = 1024  # Maximum size of each chunk in bytes (legacy, for Base64)
     max_total_size: int = 10 * 1024 * 1024  # Maximum total size (10MB)
     chunk_timeout: int = 300  # Timeout for chunks in seconds
     log_dir: str = "logs"
@@ -16,7 +16,17 @@ class ServerConfig:
     # Security settings
     require_auth: bool = False
     auth_key: Optional[str] = None
-    rate_limit: int = 100  # Maximum requests per minute
+    rate_limit: int = 100  # Maximum requests per minute (legacy)
+    
+    # New Base32 format settings
+    chunk_size: int = 45  # Base32 chunk size in characters (40-50 range)
+    session_id_length: int = 6  # Session ID length in Base32 characters
+    checksum_length: int = 3  # Checksum length in Base32 characters
+    base_rate_limit: int = 75  # Base queries per minute
+    max_rate_limit: int = 150  # Maximum queries per minute
+    enable_adaptive_rate: bool = True  # Enable adaptive rate limiting
+    enable_jitter: bool = True  # Add random jitter to delays
+    checksum_algorithm: str = "crc16"  # Checksum algorithm
     
     def __post_init__(self):
         """Validate and create necessary directories."""
@@ -40,6 +50,18 @@ class ServerConfig:
         # Validate rate limit
         if self.rate_limit <= 0:
             raise ValueError("Rate limit must be positive")
+        
+        # Validate new Base32 format settings
+        if not 40 <= self.chunk_size <= 50:
+            raise ValueError("Chunk size must be between 40 and 50 characters")
+        if not 4 <= self.session_id_length <= 8:
+            raise ValueError("Session ID length must be between 4 and 8 characters")
+        if not 2 <= self.checksum_length <= 4:
+            raise ValueError("Checksum length must be between 2 and 4 characters")
+        if self.base_rate_limit <= 0:
+            raise ValueError("Base rate limit must be positive")
+        if self.max_rate_limit < self.base_rate_limit:
+            raise ValueError("Max rate limit must be >= base rate limit")
 
 # Default configuration
 default_config = ServerConfig()
