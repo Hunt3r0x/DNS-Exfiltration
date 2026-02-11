@@ -117,8 +117,10 @@ python server.py -o output -p 5353
 
 Command line arguments:
 
-- `-o, --output-dir`: Path to the output directory (default: `output`). Files are named by session ID (e.g., `ABC123.bin`).
+- `-o, --output-dir`: Path to the output directory (default: `output`). Files are named by session ID and timestamp (e.g. `ABC123_20250211_143022.bin`).
 - `-p, --port`: Server listening port (default: 53).
+- `-c, --config`: Path to JSON configuration file.
+- `-q, --quiet`: Suppress per-chunk logs; keep errors and "Data written" messages.
 
 #### 2. Run the client
 
@@ -143,6 +145,12 @@ Client arguments:
 > **Note**: Make sure your test domain (e.g. `example.com`) is configured so that
 > queries are sent to the machine running `server.py` (e.g. via your system DNS
 > settings, a local resolver, or hosts/DNS server configuration).
+
+Run tests from the project root:
+
+```bash
+pytest tests/
+```
 
 ### Configuration
 
@@ -185,6 +193,12 @@ Key settings include:
   Base32 data, handling malformed chunks gracefully without crashing.
 - **Session Isolation**: Multiple concurrent transfers are isolated by session ID,
   preventing data corruption from mixed transfers.
+
+### Troubleshooting
+
+- **"Incorrect padding" when decoding Base32**: The server only decodes when the combined chunk length is valid (length mod 8 must be 0, 2, 4, 5, or 7 per RFC 4648). During a transfer you may see this until more chunks arrive or the client sends the DONE message. Ensure the client sends the DONE query after all chunks so the server writes once with the correct total.
+- **"Checksum validation failed"**: The chunk was corrupted in transit or reordered. The client will retry failed chunks; check network stability and rate limits.
+- **Where to find output**: Output files are named `<session_id>_<timestamp>.bin` in the server output directory. The client logs the session ID at start and at end of a successful transfer (e.g. "Session ID: ABC123. On server, look for output file named ABC123_*.bin ...").
 
 ### Logging
 
